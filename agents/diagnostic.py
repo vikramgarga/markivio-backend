@@ -41,10 +41,10 @@ async def parse_diagnosis(state: DiagnosticState) -> DiagnosticState:
     case_id = req.case_id or str(uuid.uuid4())
     raw = state["raw_diagnosis"]
 
-    # Extract JSON from response robustly
-        match = re.search(r'\{.*\}', raw, re.DOTALL)
-        clean = match.group(0) if match else raw.strip()
-        data = json.loads(clean)
+        # Extract JSON from response robustly
+    match = re.search(r'\{.*\}', raw, re.DOTALL)
+    clean = match.group(0) if match else raw.strip()
+    data = json.loads(clean)
 
     result = DiagnosisResult(
         case_id=case_id,
