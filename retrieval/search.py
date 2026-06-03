@@ -25,11 +25,11 @@ async def search_precedents(query: str, top_k: int = 5, category: str | None = N
         params["filter_category"] = category
 
     try:
-        result = db.rpc("match_precedents", params).execute()
+        result = db.rpc("match_corpus_cases", params).execute()
         rows = result.data or []
     except Exception:
         # Fallback: plain text search if vector function signature differs
-        result = db.rpc("match_precedents", {"query_embedding": embedding, "match_count": top_k}).execute()
+        result = db.rpc("match_corpus_cases", {"query_embedding": embedding, "match_count": top_k}).execute()
         rows = result.data or []
 
     precedents = []
