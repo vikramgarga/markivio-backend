@@ -12,7 +12,7 @@ from prompts.synthesizer import SYNTHESIZER_SYSTEM, SYNTHESIZER_USER
 llm = ChatAnthropic(
     model="claude-sonnet-4-6",
     api_key=settings.anthropic_api_key,
-    max_tokens=4096,
+    max_tokens=8192,
 )
 
 
@@ -41,7 +41,10 @@ async def generate_synthesis(state: SynthesisState) -> SynthesisState:
 async def parse_and_save(state: SynthesisState) -> SynthesisState:
     req = state["request"]
     raw = state["raw_output"].strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    data = json.loads(raw)
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Synthesizer output was truncated or malformed (max_tokens too low?): {e}") from e
 
     pillars = [
         StrategicPillar(
