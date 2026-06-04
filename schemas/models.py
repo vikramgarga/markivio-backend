@@ -25,7 +25,7 @@ class DiagnosisResult(BaseModel):
 # ── Intake ────────────────────────────────────────────────────────────────────
 
 class IntakeRequest(BaseModel):
-    case_id: str
+    case_id: str | None = None   # auto-generated if not provided
     raw_input: str = Field(..., min_length=10)
     client_name: str
     industry: str
@@ -52,7 +52,7 @@ class CaseFile(BaseModel):
 # ── Research ──────────────────────────────────────────────────────────────────
 
 class ResearchRequest(BaseModel):
-    case_id: str
+    case_id: str | None = None   # auto-generated if not provided
     query: str = Field(..., min_length=5)
     category: str | None = None
     top_k: int = Field(default=5, ge=1, le=20)

@@ -1,4 +1,5 @@
 import json
+import uuid
 from typing import TypedDict
 from langgraph.graph import StateGraph, END
 from langchain_anthropic import ChatAnthropic
@@ -39,11 +40,12 @@ async def extract_case_file(state: IntakeState) -> IntakeState:
 
 async def parse_and_save(state: IntakeState) -> IntakeState:
     req = state["request"]
+    case_id = req.case_id or str(uuid.uuid4())
     raw = state["raw_output"].strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     data = json.loads(raw)
 
     case_file = CaseFile(
-        case_id=req.case_id,
+        case_id=case_id,
         client_name=req.client_name,
         industry=req.industry,
         problem_summary=data["problem_summary"],

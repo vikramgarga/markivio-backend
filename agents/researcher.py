@@ -1,4 +1,5 @@
 import json
+import uuid
 from typing import TypedDict
 from langgraph.graph import StateGraph, END
 from langchain_anthropic import ChatAnthropic
@@ -56,8 +57,9 @@ async def synthesise_precedents(state: ResearchState) -> ResearchState:
 
 async def assemble_and_save(state: ResearchState) -> ResearchState:
     req = state["request"]
+    case_id = req.case_id or str(uuid.uuid4())
     result = ResearchResult(
-        case_id=req.case_id,
+        case_id=case_id,
         query=req.query,
         precedents=state["precedents"],
         synthesis_note=state["synthesis_note"],
@@ -66,7 +68,7 @@ async def assemble_and_save(state: ResearchState) -> ResearchState:
     db = get_supabase()
     db.table("research_results").upsert(
         {
-            "case_id": req.case_id,
+            "case_id": case_id,
             "query": req.query,
             "results": result.model_dump(),
         }
