@@ -19,29 +19,32 @@ async def search_precedents(query: str, top_k: int = 5, category: str | None = N
 
     db = get_supabase()
 
-    # Call the pgvector retrieval function deployed in Supabase
+    # RPC function is match_corpus_cases (table: corpus_cases)
+    # Returns: case_id, title, brand, summary, key_insight, similarity
     params: dict = {"query_embedding": embedding, "match_count": top_k}
-    if category:
-        params["filter_category"] = category
 
-    try:
-        result = db.rpc("match_corpus_cases", params).execute()
-        rows = result.data or []
-    except Exception:
-        # Fallback: plain text search if vector function signature differs
-        result = db.rpc("match_corpus_cases", {"query_embedding": embedding, "match_count": top_k}).execute()
-        rows = result.data or []
+    result = db.rpc("match_corpus_cases", params).execute()
+    rows = result.data or []
 
     precedents = []
     for row in rows:
+        # Build a rich summary from the available fields
+        brand = row.get("brand", "")
+        summary = row.get("summary", "")
+        key_insight = row.get("key_insight", "")
+        full_summary = f"{summary} Key insight: {key_insight}".strip() if key_insight else summary
+
         precedents.append(
             Precedent(
-                id=str(row.get("id", "")),
-                title=row.get("title", ""),
-                summary=row.get("content", row.get("summary", "")),
-                category=row.get("category", "general"),
+                id=str(row.get("case_id", row.get("id", ""))),
+                title=f"{brand} — {row.get('title', '')}" if brand else row.get("title", ""),
+                summary=full_summary,
+                category=row.get("industry", row.get("category", "general")),
                 similarity=float(row.get("similarity", 0.0)),
-                metadata=row.get("metadata", {}),
+                metadata={
+                    "brand": brand,
+                    "key_insight": key_insight,
+                },
             )
         )
     return precedents
