@@ -23,13 +23,53 @@ class IntakeState(TypedDict):
     case_file: CaseFile | None
 
 
+def _resolve_industry(req: IntakeRequest) -> str:
+    if req.industry == "Other" and req.industry_other:
+        return req.industry_other
+    return req.industry
+
+
+def _build_challenges_text(req: IntakeRequest) -> str:
+    items = [c for c in req.challenges if c != "Other"]
+    if req.challenges_other:
+        items.append(req.challenges_other)
+    return "\n".join(f"- {c}" for c in items) if items else "Not specified"
+
+
+def _build_inspiration_text(req: IntakeRequest) -> str:
+    if not req.inspiration_brand and not req.inspiration_category:
+        return "None provided"
+    category = req.inspiration_category or ""
+    if category == "Other" and req.inspiration_category_other:
+        category = req.inspiration_category_other
+    parts = []
+    if req.inspiration_brand:
+        parts.append(f"Brand: {req.inspiration_brand}")
+    if category:
+        parts.append(f"Category: {category}")
+    if req.inspiration_admiration:
+        parts.append(f"What they admire: {req.inspiration_admiration}")
+    return "\n".join(parts)
+
+
+def _resolve_technique(req: IntakeRequest) -> str:
+    if not req.innovation_technique:
+        return "Not specified"
+    if req.innovation_technique == "Other" and req.innovation_technique_other:
+        return req.innovation_technique_other
+    return req.innovation_technique
+
+
 async def extract_case_file(state: IntakeState) -> IntakeState:
     req = state["request"]
     user_msg = INTAKE_USER.format(
         client_name=req.client_name,
-        industry=req.industry,
+        industry=_resolve_industry(req),
         budget_inr=f"₹{req.budget_inr:,}" if req.budget_inr else "Not specified",
         timeline_weeks=req.timeline_weeks or "Not specified",
+        challenges=_build_challenges_text(req),
+        inspiration=_build_inspiration_text(req),
+        innovation_technique=_resolve_technique(req),
         raw_input=req.raw_input,
     )
     response = await llm.ainvoke(
@@ -44,10 +84,26 @@ async def parse_and_save(state: IntakeState) -> IntakeState:
     raw = state["raw_output"].strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     data = json.loads(raw)
 
+    resolved_industry = _resolve_industry(req)
+    resolved_challenges = [c for c in req.challenges if c != "Other"]
+    if req.challenges_other:
+        resolved_challenges.append(req.challenges_other)
+
+    resolved_inspiration_category = req.inspiration_category
+    if resolved_inspiration_category == "Other" and req.inspiration_category_other:
+        resolved_inspiration_category = req.inspiration_category_other
+
+    resolved_technique = _resolve_technique(req)
+
     case_file = CaseFile(
         case_id=case_id,
         client_name=req.client_name,
-        industry=req.industry,
+        industry=resolved_industry,
+        challenges=resolved_challenges,
+        inspiration_brand=req.inspiration_brand,
+        inspiration_category=resolved_inspiration_category,
+        inspiration_admiration=req.inspiration_admiration,
+        innovation_technique=resolved_technique if resolved_technique != "Not specified" else None,
         problem_summary=data["problem_summary"],
         business_context=data["business_context"],
         target_audience=data["target_audience"],
@@ -60,7 +116,6 @@ async def parse_and_save(state: IntakeState) -> IntakeState:
         timeline_weeks=req.timeline_weeks,
     )
 
-    # Persist to Supabase
     db = get_supabase()
     db.table("intakes").upsert(
         {
