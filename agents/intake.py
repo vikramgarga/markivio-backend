@@ -73,6 +73,17 @@ async def extract_case_file(state: IntakeState) -> IntakeState:
     return {**state, "raw_output": response.content}
 
 
+def _to_str(value) -> str:
+    """Flatten any LLM hallucinated dict/list into a plain string."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return "; ".join(f"{k}: {v}" for k, v in value.items())
+    if isinstance(value, list):
+        return "; ".join(str(v) for v in value)
+    return str(value) if value is not None else ""
+
+
 async def parse_and_save(state: IntakeState) -> IntakeState:
     req = state["request"]
     case_id = req.case_id or str(uuid.uuid4())
@@ -101,14 +112,14 @@ async def parse_and_save(state: IntakeState) -> IntakeState:
         inspiration_brand=resolved_inspiration,
         inspiration_admiration=req.inspiration_admiration,
         innovation_technique=resolved_technique if resolved_technique != "Not specified" else None,
-        problem_summary=data["problem_summary"],
-        business_context=data["business_context"],
-        target_audience=data["target_audience"],
-        current_situation=data["current_situation"],
-        desired_outcome=data["desired_outcome"],
-        constraints=data["constraints"],
-        success_metrics=data["success_metrics"],
-        priority_level=data["priority_level"],
+        problem_summary=_to_str(data["problem_summary"]),
+        business_context=_to_str(data["business_context"]),
+        target_audience=_to_str(data["target_audience"]),
+        current_situation=_to_str(data["current_situation"]),
+        desired_outcome=_to_str(data["desired_outcome"]),
+        constraints=[_to_str(c) for c in data["constraints"]],
+        success_metrics=[_to_str(m) for m in data["success_metrics"]],
+        priority_level=_to_str(data["priority_level"]),
         budget_inr=req.budget_inr,
         timeline_weeks=req.timeline_weeks,
     )
