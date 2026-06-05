@@ -37,16 +37,11 @@ def _build_challenges_text(req: IntakeRequest) -> str:
 
 
 def _build_inspiration_text(req: IntakeRequest) -> str:
-    if not req.inspiration_brand and not req.inspiration_category:
+    option = req.inspiration_brand_option or ""
+    if not option:
         return "None provided"
-    category = req.inspiration_category or ""
-    if category == "Other" and req.inspiration_category_other:
-        category = req.inspiration_category_other
-    parts = []
-    if req.inspiration_brand:
-        parts.append(f"Brand: {req.inspiration_brand}")
-    if category:
-        parts.append(f"Category: {category}")
+    brand_label = req.inspiration_brand_other if option.startswith("Other") and req.inspiration_brand_other else option
+    parts = [f"Brand / reference: {brand_label}"]
     if req.inspiration_admiration:
         parts.append(f"What they admire: {req.inspiration_admiration}")
     return "\n".join(parts)
@@ -89,19 +84,21 @@ async def parse_and_save(state: IntakeState) -> IntakeState:
     if req.challenges_other:
         resolved_challenges.append(req.challenges_other)
 
-    resolved_inspiration_category = req.inspiration_category
-    if resolved_inspiration_category == "Other" and req.inspiration_category_other:
-        resolved_inspiration_category = req.inspiration_category_other
-
     resolved_technique = _resolve_technique(req)
+
+    option = req.inspiration_brand_option or ""
+    resolved_inspiration = (
+        req.inspiration_brand_other
+        if option.startswith("Other") and req.inspiration_brand_other
+        else option or None
+    )
 
     case_file = CaseFile(
         case_id=case_id,
         client_name=req.client_name,
         industry=resolved_industry,
         challenges=resolved_challenges,
-        inspiration_brand=req.inspiration_brand,
-        inspiration_category=resolved_inspiration_category,
+        inspiration_brand=resolved_inspiration,
         inspiration_admiration=req.inspiration_admiration,
         innovation_technique=resolved_technique if resolved_technique != "Not specified" else None,
         problem_summary=data["problem_summary"],

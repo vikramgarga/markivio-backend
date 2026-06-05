@@ -4,7 +4,7 @@ from schemas.models import (
     CaseFile,
     INDUSTRY_OPTIONS,
     CHALLENGE_OPTIONS,
-    INSPIRATION_CATEGORY_OPTIONS,
+    INSPIRATION_BRAND_OPTIONS,
     INNOVATION_TECHNIQUE_OPTIONS,
 )
 from agents.intake import run_intake
@@ -18,7 +18,7 @@ async def intake_options() -> dict:
     return {
         "industries": INDUSTRY_OPTIONS,
         "challenges": CHALLENGE_OPTIONS,
-        "inspiration_categories": INSPIRATION_CATEGORY_OPTIONS,
+        "inspiration_brands": INSPIRATION_BRAND_OPTIONS,
         "innovation_techniques": INNOVATION_TECHNIQUE_OPTIONS,
     }
 
