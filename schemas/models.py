@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Any
+from typing import Any, Literal
 from datetime import datetime
 
 
@@ -579,3 +579,137 @@ class SynthesisResult(BaseModel):
     risks: list[str]
     recommended_timeline: str
     created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+
+
+# ── Strategy Studio — Brief Stage Model ───────────────────────────────────────
+#
+# A Brief is the master record for a client engagement.
+# It moves through 5 stages. Each stage is gated by a human consultant
+# who explicitly releases it to the client portal.
+#
+# Stage 1 — Debrief:      Markivio confirms what it heard. Client confirms or corrects.
+# Stage 2 — Read:         Internal only. AI + consultant deliberate. No client output.
+# Stage 3 — Situation:    First client-facing deliverable. The tension, not the solution.
+# Stage 4 — Strategy:     How Markivio frames the strategic choice. Still no tactics.
+# Stage 5 — Recommendation: The culmination. Specific, narrative, earned.
+
+BriefStageType = Literal[
+    "debrief",      # Stage 1
+    "read",         # Stage 2 — internal only, never released
+    "situation",    # Stage 3
+    "strategy",     # Stage 4
+    "recommendation",  # Stage 5
+]
+
+BriefStatus = Literal[
+    "intake_received",       # Brief submitted, not yet confirmed
+    "debrief_sent",          # Stage 1 released to client
+    "client_confirmed",      # Client confirmed the debrief
+    "read_in_progress",      # Internal deliberation (Stage 2)
+    "situation_ready",       # Stage 3 drafted, awaiting release
+    "situation_released",    # Stage 3 live on client portal
+    "strategy_ready",        # Stage 4 drafted, awaiting release
+    "strategy_released",     # Stage 4 live on client portal
+    "recommendation_ready",  # Stage 5 drafted, awaiting release
+    "recommendation_released",  # Stage 5 live — engagement complete
+]
+
+
+class Brief(BaseModel):
+    """Master record for a client engagement across all 5 stages."""
+    brief_id: str
+    client_name: str
+    client_email: str | None = None
+    industry: str
+    challenges: list[str] = Field(default_factory=list)
+    raw_input: str                          # Client's original words — always preserved
+    budget_inr: int | None = None
+    timeline_weeks: int | None = None
+    inspiration_brand: str | None = None
+    inspiration_admiration: str | None = None
+    innovation_technique: str | None = None
+    status: BriefStatus = "intake_received"
+    assigned_to: str | None = None          # Consultant name/id
+    created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    updated_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+
+
+class BriefStageContent(BaseModel):
+    """The content of a single stage — generated internally, released deliberately."""
+    brief_id: str
+    stage: BriefStageType
+    # Internal fields (consultant + AI only)
+    internal_notes: str = ""               # Consultant notes from War Room
+    ai_angles: list[dict] = Field(default_factory=list)  # Angles explored
+    selected_angle: str | None = None
+    # Client-facing content (only populated when ready to release)
+    headline: str = ""                     # One strong sentence for the client
+    body: str = ""                         # Narrative prose — no bullets, no frameworks
+    is_released: bool = False
+    released_at: str | None = None
+    created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+
+
+class WarRoomMessage(BaseModel):
+    """A single message in the War Room conversation between consultant and AI."""
+    brief_id: str
+    role: Literal["ai", "consultant"]
+    content: str
+    message_type: Literal[
+        "opening_briefing",   # AI's structured first briefing
+        "angle_suggestion",   # AI proposing a strategic angle
+        "corpus_reference",   # AI surfacing a corpus pattern
+        "draft_content",      # AI drafting client-facing content
+        "consultant_message", # Consultant input
+        "standard",           # Regular conversational exchange
+    ] = "standard"
+    pinned: bool = False                   # Consultant can pin key insights
+    created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+
+
+class WarRoomTurn(BaseModel):
+    """Request payload for a consultant message in the War Room."""
+    brief_id: str
+    message: str
+    request_type: Literal[
+        "explore_angle",    # Go deeper on an angle
+        "draft_stage",      # Draft content for a specific stage
+        "corpus_search",    # Surface relevant corpus patterns
+        "devil_advocate",   # Challenge the current direction
+        "standard",         # General deliberation
+    ] = "standard"
+    target_stage: BriefStageType | None = None  # When request_type = draft_stage
+
+
+class WarRoomResponse(BaseModel):
+    """AI response from the War Room."""
+    brief_id: str
+    message: str
+    message_type: str
+    draft_content: BriefStageContent | None = None  # Populated when a draft is generated
+    corpus_references: list[dict] = Field(default_factory=list)
+
+
+class StageReleaseRequest(BaseModel):
+    """Consultant explicitly releases a stage to the client portal."""
+    brief_id: str
+    stage: BriefStageType
+    # Consultant can edit the draft before releasing
+    headline: str | None = None
+    body: str | None = None
+
+
+class ClientPortalView(BaseModel):
+    """What the client sees — only released stages, their original brief, next signal."""
+    brief_id: str
+    client_name: str
+    raw_input: str                          # Always shown — their own words
+    released_stages: list[BriefStageContent]
+    current_stage: BriefStageType | None    # The most recently released stage
+    next_signal: str                        # Vague, warm signal of what's coming
+    status: BriefStatus
+
+
+class OpeningBriefingRequest(BaseModel):
+    """Trigger the AI to generate its opening briefing for a new brief."""
+    brief_id: str
