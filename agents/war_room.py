@@ -22,6 +22,8 @@ from schemas.models import (
     Brief,
     BriefStageContent,
     BriefStageType,
+    ClientPortalView,
+    StageReleaseRequest,
     WarRoomMessage,
     WarRoomTurn,
     WarRoomResponse,
@@ -446,8 +448,6 @@ async def release_stage(
     body: str | None = None,
 ) -> ClientPortalView:
     """Consultant releases a stage to the client portal. The gate."""
-    from schemas.models import ClientPortalView, StageReleaseRequest
-
     db = get_supabase()
     now = datetime.utcnow().isoformat()
 
@@ -487,8 +487,6 @@ async def release_stage(
 
 async def get_client_portal_view(brief_id: str) -> ClientPortalView:
     """Build what the client sees — only released stages."""
-    from schemas.models import ClientPortalView
-
     db = get_supabase()
 
     brief_result = db.table("briefs").select("*").eq("brief_id", brief_id).single().execute()
