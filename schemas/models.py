@@ -1,3 +1,4 @@
+import uuid
 from pydantic import BaseModel, Field
 from typing import Any, Literal
 from datetime import datetime
@@ -617,7 +618,7 @@ BriefStatus = Literal[
 
 class Brief(BaseModel):
     """Master record for a client engagement across all 5 stages."""
-    brief_id: str
+    brief_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     client_name: str
     client_email: str | None = None
     industry: str
