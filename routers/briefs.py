@@ -27,6 +27,7 @@ from agents.war_room import (
     release_stage,
     get_client_portal_view,
 )
+from agents.brand_file import get_brand_file, upsert_brand_file
 from db.client import get_supabase
 
 router = APIRouter()
@@ -225,6 +226,43 @@ async def release_stage_to_client(
             headline=request.headline,
             body=request.body,
         )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Brand File — consultant-facing, per-client knowledge store ────────────────
+
+@router.get("/briefs/{brief_id}/brand-file")
+async def get_brief_brand_file(brief_id: str) -> dict:
+    """Get the Brand File for the client associated with this brief."""
+    db = get_supabase()
+    try:
+        result = db.table("briefs").select("client_name, industry").eq("brief_id", brief_id).single().execute()
+        client_name = result.data["client_name"]
+        industry = result.data["industry"]
+        bf = get_brand_file(client_name)
+        if not bf:
+            return {
+                "exists": False,
+                "client_name": client_name,
+                "industry": industry,
+                "message": "No brand file yet — one will be created after the first stage is drafted.",
+            }
+        return {"exists": True, **bf}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/briefs/{brief_id}/brand-file")
+async def update_brief_brand_file(brief_id: str, updates: dict) -> dict:
+    """Consultant updates the Brand File — notes, corrections, annotations."""
+    db = get_supabase()
+    try:
+        result = db.table("briefs").select("client_name, industry").eq("brief_id", brief_id).single().execute()
+        client_name = result.data["client_name"]
+        industry = result.data["industry"]
+        bf = upsert_brand_file(client_name, industry, brief_id, updates)
+        return {"exists": True, **bf}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

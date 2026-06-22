@@ -22,6 +22,7 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from config import settings
 from db.client import get_supabase
 from retrieval.corpus import retrieve_corpus, format_corpus_for_prompt
+from agents.brand_file import get_brand_file, format_brand_file_for_prompt, extract_and_update_brand_file
 from schemas.models import (
     Brief,
     BriefStageContent,
@@ -340,6 +341,10 @@ async def generate_opening_briefing(request: OpeningBriefingRequest) -> WarRoomR
 
     brief_context = _build_brief_context(brief)
 
+    # Inject Brand File if this client has been here before
+    brand_file = get_brand_file(brief.client_name)
+    brand_file_block = format_brand_file_for_prompt(brand_file) if brand_file else ""
+
     # Retrieve relevant expert corpus chunks for this brief
     corpus_chunks = await retrieve_corpus(
         brief_text=f"{brief.client_name} {brief.industry} {brief.raw_input}",
@@ -347,11 +352,13 @@ async def generate_opening_briefing(request: OpeningBriefingRequest) -> WarRoomR
         top_k=8,
     )
     corpus_block = format_corpus_for_prompt(corpus_chunks)
-    corpus_section = f"\n\n{corpus_block}" if corpus_block else ""
+    context_blocks = brief_context
+    if brand_file_block:
+        context_blocks += f"\n\n{brand_file_block}"
+    if corpus_block:
+        context_blocks += f"\n\n{corpus_block}"
 
-    prompt = OPENING_BRIEFING_PROMPT.format(
-        brief_context=brief_context + corpus_section,
-    )
+    prompt = OPENING_BRIEFING_PROMPT.format(brief_context=context_blocks)
 
     data = await _invoke_with_retry(
         [SystemMessage(content=WAR_ROOM_SYSTEM), HumanMessage(content=prompt)],
@@ -497,7 +504,11 @@ async def war_room_turn(turn: WarRoomTurn) -> WarRoomResponse:
     brief = Brief(**result.data)
     brief_context = _build_brief_context(brief)
 
-    # Retrieve relevant corpus chunks — query = brief + consultant's current message
+    # Brand File — inject accumulated client knowledge first
+    brand_file = get_brand_file(brief.client_name)
+    brand_file_block = format_brand_file_for_prompt(brand_file) if brand_file else ""
+
+    # Corpus RAG — retrieve relevant expert chunks
     corpus_query = f"{brief.industry} {brief.raw_input} {turn.message}"
     corpus_chunks = await retrieve_corpus(
         brief_text=corpus_query,
@@ -505,8 +516,11 @@ async def war_room_turn(turn: WarRoomTurn) -> WarRoomResponse:
         top_k=6,
     )
     corpus_block = format_corpus_for_prompt(corpus_chunks)
+
+    if brand_file_block:
+        brief_context += f"\n\n{brand_file_block}"
     if corpus_block:
-        brief_context = brief_context + f"\n\n{corpus_block}"
+        brief_context += f"\n\n{corpus_block}"
 
     # Fetch conversation history (last 20 messages for context)
     history_result = (
@@ -590,6 +604,16 @@ async def war_room_turn(turn: WarRoomTurn) -> WarRoomResponse:
         message_type = "draft_content"
         logger.info(f"Drafted stage {turn.target_stage} for brief {turn.brief_id}")
 
+        # Async: update Brand File from this draft (non-blocking)
+        import asyncio
+        asyncio.create_task(extract_and_update_brand_file(
+            brief_id=turn.brief_id,
+            client_name=brief.client_name,
+            industry=brief.industry,
+            stage=turn.target_stage,
+            stage_data=data,
+        ))
+
     # Store AI response
     ai_msg = WarRoomMessage(
         brief_id=turn.brief_id,
@@ -666,6 +690,18 @@ async def release_stage(
         "status": new_status,
         "updated_at": now,
     }).eq("brief_id", brief_id).execute()
+
+    # Async: update Brand File on release (non-blocking)
+    import asyncio
+    brief_result = db.table("briefs").select("*").eq("brief_id", brief_id).single().execute()
+    brief_obj = Brief(**brief_result.data)
+    asyncio.create_task(extract_and_update_brand_file(
+        brief_id=brief_id,
+        client_name=brief_obj.client_name,
+        industry=brief_obj.industry,
+        stage=stage,
+        stage_data=stage_data,
+    ))
 
     # Return the updated client portal view
     return await get_client_portal_view(brief_id)
