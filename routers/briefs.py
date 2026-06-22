@@ -29,6 +29,7 @@ from agents.war_room import (
 )
 from agents.brand_file import get_brand_file, upsert_brand_file
 from agents.competitive_intel import run_competitive_scan, get_latest_competitive_scan
+from agents.verifier import mark_consultant_override
 from db.client import get_supabase
 
 router = APIRouter()
@@ -266,6 +267,15 @@ async def update_brief_brand_file(brief_id: str, updates: dict) -> dict:
         return {"exists": True, **bf}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Verification override — consultant proceeds despite issues ─────────────────
+
+@router.post("/briefs/{brief_id}/stages/{stage}/override-verification")
+async def override_verification(brief_id: str, stage: str) -> dict:
+    """Consultant has reviewed the verification issues and chosen to proceed anyway."""
+    mark_consultant_override(brief_id, stage)
+    return {"overrode": True, "brief_id": brief_id, "stage": stage}
 
 
 # ── Competitive Intelligence — Stage 2 (Read) ────────────────────────────────

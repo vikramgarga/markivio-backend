@@ -24,6 +24,7 @@ from db.client import get_supabase
 from retrieval.corpus import retrieve_corpus, format_corpus_for_prompt
 from agents.brand_file import get_brand_file, format_brand_file_for_prompt, extract_and_update_brand_file
 from agents.competitive_intel import get_latest_competitive_scan, format_scan_for_prompt
+from agents.verifier import verify_stage_draft
 from schemas.models import (
     Brief,
     BriefStageContent,
@@ -592,7 +593,7 @@ async def war_room_turn(turn: WarRoomTurn) -> WarRoomResponse:
     messages = [SystemMessage(content=WAR_ROOM_SYSTEM)] + lc_history + [HumanMessage(content=prompt)]
     data = await _invoke_with_retry(messages, schema_description=schema_hint)
 
-    ai_message_content = data.get("message", raw)
+    ai_message_content = data.get("message", "")
     message_type = data.get("message_type", "standard")
 
     # If it's a draft, create a BriefStageContent object
@@ -612,6 +613,18 @@ async def war_room_turn(turn: WarRoomTurn) -> WarRoomResponse:
         db.table("brief_stages").upsert(draft_content.model_dump()).execute()
         message_type = "draft_content"
         logger.info(f"Drafted stage {turn.target_stage} for brief {turn.brief_id}")
+
+        # Run verification pass — Haiku, fast, non-blocking on the main response
+        verification = await verify_stage_draft(
+            brief_id=turn.brief_id,
+            stage=turn.target_stage,
+            headline=data.get("headline", ""),
+            body=data.get("body", ""),
+            brand_file=brand_file,
+            comp_scan=comp_scan,
+        )
+        # Attach verification result to data so it flows through to the response
+        data["_verification"] = verification
 
         # Async: update Brand File from this draft (non-blocking)
         import asyncio
@@ -633,6 +646,7 @@ async def war_room_turn(turn: WarRoomTurn) -> WarRoomResponse:
     db.table("war_room_messages").insert(ai_msg.model_dump()).execute()
 
     corpus_refs = data.get("corpus_patterns", data.get("patterns", []))
+    verification = data.get("_verification")
 
     return WarRoomResponse(
         brief_id=turn.brief_id,
@@ -640,6 +654,7 @@ async def war_room_turn(turn: WarRoomTurn) -> WarRoomResponse:
         message_type=message_type,
         draft_content=draft_content,
         corpus_references=corpus_refs,
+        verification=verification,
     )
 
 

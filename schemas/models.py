@@ -1,6 +1,6 @@
 import uuid
 from pydantic import BaseModel, Field
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 from datetime import datetime
 
 
@@ -687,8 +687,9 @@ class WarRoomResponse(BaseModel):
     brief_id: str
     message: str
     message_type: str
-    draft_content: BriefStageContent | None = None  # Populated when a draft is generated
+    draft_content: Optional["BriefStageContent"] = None
     corpus_references: list[dict] = Field(default_factory=list)
+    verification: Optional[dict] = None  # Brand guardianship check result
 
 
 class StageReleaseRequest(BaseModel):
