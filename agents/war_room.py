@@ -10,14 +10,18 @@ The consultant is always the final gate.
 """
 
 import json
-import uuid
+import logging
 from datetime import datetime
+from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from config import settings
 from db.client import get_supabase
+from retrieval.corpus import retrieve_corpus, format_corpus_for_prompt
 from schemas.models import (
     Brief,
     BriefStageContent,
@@ -70,6 +74,175 @@ When suggesting angles:
 - Be honest about which angle you find most compelling and why
 
 Always respond in valid JSON matching the schema the router expects."""
+
+# ── Per-stage structured output schemas ───────────────────────────────────────
+
+STAGE_SCHEMAS: dict[str, dict[str, Any]] = {
+    "debrief": {
+        "description": "Debrief — confirm understanding of the client's situation before any work begins",
+        "fields": {
+            "headline": "One strong sentence the client will remember — the essence of what we heard",
+            "body": "3 paragraphs: (1) the situation as we understand it, (2) the core tension or challenge, (3) what we will focus on and why",
+            "icp": {
+                "primary_segment": "The single most important target customer — specific, not broad",
+                "psychographics": "What drives them — beliefs, fears, aspirations relevant to this brand",
+                "jobs_to_be_done": ["Job 1", "Job 2", "Job 3"],
+            },
+            "key_tensions": ["Tension 1 — specific to this brief", "Tension 2"],
+            "consultant_flags": ["Flag 1 — something the consultant should probe further"],
+            "internal_note": "One sentence for the consultant — what is most delicate or uncertain about this debrief",
+        },
+        "output_schema": """{
+  "headline": "<one strong sentence — the essence of what we heard>",
+  "body": "<paragraph 1: situation as we understand it>\\n\\n<paragraph 2: core tension>\\n\\n<paragraph 3: what we will focus on and why>",
+  "icp": {
+    "primary_segment": "<specific target customer description>",
+    "psychographics": "<beliefs, fears, aspirations relevant to this brand>",
+    "jobs_to_be_done": ["<functional job>", "<emotional job>", "<social job>"]
+  },
+  "key_tensions": ["<tension 1>", "<tension 2>"],
+  "consultant_flags": ["<something to probe further>"],
+  "internal_note": "<one sentence for the consultant only>"
+}""",
+    },
+
+    "situation": {
+        "description": "Situation — the strategic problem statement. What is true, what has changed, what it means.",
+        "fields": {
+            "headline": "One sentence that names the situation precisely — the consultant's single most important claim",
+            "body": "3 paragraphs using Pyramid Principle: (1) Context — undisputed facts, (2) Complication — what has changed or is wrong, (3) Implication — what this means and why it demands a response now",
+            "situation_statement": "2-3 sentences max — the cleanest articulation of the situation",
+            "evidence": ["3 specific supporting points — facts, observations, or patterns"],
+            "so_what": "The strategic implication — what must be decided as a result",
+            "internal_note": "One sentence for the consultant",
+        },
+        "output_schema": """{
+  "headline": "<one sentence naming the situation precisely>",
+  "body": "<paragraph 1: Context — undisputed facts>\\n\\n<paragraph 2: Complication — what has changed or is wrong>\\n\\n<paragraph 3: Implication — what this means and why it demands a response now>",
+  "situation_statement": "<2-3 sentences — the cleanest articulation>",
+  "evidence": ["<supporting point 1>", "<supporting point 2>", "<supporting point 3>"],
+  "so_what": "<the strategic implication — what must be decided>",
+  "internal_note": "<one sentence for the consultant only>"
+}""",
+    },
+
+    "strategy": {
+        "description": "Strategy — the strategic direction and positioning. The choice being made, not the tactics.",
+        "fields": {
+            "headline": "One sentence stating the strategic direction — confident, not hedged",
+            "body": "3 paragraphs: (1) The strategic choice being made and why, (2) The positioning — where the brand will play and how it will win, (3) What this rules out and why that is the right trade-off",
+            "strategic_direction": "The single most important strategic move",
+            "positioning_statement": "For [target], [brand] is the [category frame] that [benefit] because [RTB]",
+            "key_messages": ["3 messages that flow from the positioning — not slogans, strategic claims"],
+            "rationale": "The decisive argument for this direction over the alternatives",
+            "internal_note": "One sentence for the consultant",
+        },
+        "output_schema": """{
+  "headline": "<one sentence stating the strategic direction — confident, not hedged>",
+  "body": "<paragraph 1: The strategic choice and why>\\n\\n<paragraph 2: Where the brand will play and how it will win>\\n\\n<paragraph 3: What this rules out and why that is the right trade-off>",
+  "strategic_direction": "<the single most important strategic move>",
+  "positioning_statement": "For [target], [brand] is the [category] that [benefit] because [RTB]",
+  "key_messages": ["<strategic claim 1>", "<strategic claim 2>", "<strategic claim 3>"],
+  "rationale": "<the decisive argument for this direction>",
+  "internal_note": "<one sentence for the consultant only>"
+}""",
+    },
+
+    "recommendation": {
+        "description": "Recommendation — specific, earned, ready to act on. Everything before this has been building to here.",
+        "fields": {
+            "headline": "The headline recommendation — one sentence, direct, no hedging",
+            "body": "3 paragraphs: (1) The recommendation and the argument for it, (2) The priority actions in sequence — what to do first and why order matters, (3) What success looks like and how we will know it is working",
+            "priority_actions": [{"action": "string", "rationale": "string", "timeframe": "string"}],
+            "measurement_framework": [{"metric": "string", "target": "string", "timeframe": "string"}],
+            "what_success_looks_like": "A vivid, specific description of the outcome if this works",
+            "internal_note": "One sentence for the consultant",
+        },
+        "output_schema": """{
+  "headline": "<the headline recommendation — one sentence, direct>",
+  "body": "<paragraph 1: The recommendation and argument for it>\\n\\n<paragraph 2: Priority actions in sequence — what to do first and why order matters>\\n\\n<paragraph 3: What success looks like and how we will know it is working>",
+  "priority_actions": [
+    {"action": "<specific action>", "rationale": "<why this action>", "timeframe": "<30/60/90 days>"}
+  ],
+  "measurement_framework": [
+    {"metric": "<what to measure>", "target": "<specific target>", "timeframe": "<when>"}
+  ],
+  "what_success_looks_like": "<vivid, specific description of the outcome>",
+  "internal_note": "<one sentence for the consultant only>"
+}""",
+    },
+}
+
+# Stages that don't have client-facing schemas (internal only)
+STAGE_SCHEMAS["read"] = {
+    "description": "Read — internal competitive and category analysis. Never shown to client.",
+    "output_schema": """{
+  "headline": "<internal synthesis headline>",
+  "body": "<internal analysis — full detail, consultant-only>",
+  "category_summary": "<how the category is structured>",
+  "competitor_positions": [{"name": "<competitor>", "claim": "<their claim>", "weakness": "<their weakness>"}],
+  "white_space": "<the gap in the market>",
+  "consultant_synthesis": "<the strategic read from all of the above>",
+  "internal_note": "<one sentence for the consultant>"
+}""",
+}
+
+
+def _get_stage_prompt_instruction(stage: str) -> str:
+    """Return the stage-specific schema instruction for draft prompts."""
+    schema = STAGE_SCHEMAS.get(stage)
+    if not schema:
+        return ""
+    return f"""Stage purpose: {schema['description']}
+
+You MUST return a JSON object matching this exact schema:
+{schema['output_schema']}
+
+Requirements:
+- headline: one strong sentence — specific to this client, not generic
+- body: clean narrative paragraphs separated by \\n\\n — NO bullet points, NO headers, NO framework names
+- All other fields: complete and specific to this brief
+- internal_note: consultant-only — never seen by client"""
+
+
+# ── JSON parsing with retry ────────────────────────────────────────────────────
+
+def _strip_json(raw: str) -> str:
+    return raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+
+
+async def _invoke_with_retry(messages: list, schema_description: str, max_retries: int = 2) -> dict:
+    """Call the LLM and retry up to max_retries times if JSON schema validation fails."""
+    from langchain_core.messages import HumanMessage
+
+    last_error = None
+    for attempt in range(max_retries + 1):
+        try:
+            response = await llm.ainvoke(messages)
+            raw = _strip_json(response.content)
+            data = json.loads(raw)
+
+            # Basic validation: must be a dict with at least headline and body
+            if not isinstance(data, dict):
+                raise ValueError("Response is not a JSON object")
+            if "message" not in data and "headline" not in data and "situation_read" not in data:
+                raise ValueError(f"Missing required fields. Got keys: {list(data.keys())}")
+
+            return data
+
+        except (json.JSONDecodeError, ValueError) as e:
+            last_error = e
+            logger.warning(f"Schema validation failed (attempt {attempt + 1}): {e}")
+            if attempt < max_retries:
+                correction = HumanMessage(
+                    content=f"Your previous response did not produce valid JSON matching the required schema.\n"
+                            f"Error: {e}\n"
+                            f"Required schema: {schema_description}\n"
+                            f"Please regenerate your response as valid JSON only — no markdown, no explanation."
+                )
+                messages = messages + [correction]
+
+    raise ValueError(f"Failed to produce valid JSON after {max_retries + 1} attempts: {last_error}")
 
 
 def _build_brief_context(brief: Brief) -> str:
@@ -166,17 +339,25 @@ async def generate_opening_briefing(request: OpeningBriefingRequest) -> WarRoomR
     brief = Brief(**brief_data)
 
     brief_context = _build_brief_context(brief)
-    prompt = OPENING_BRIEFING_PROMPT.format(brief_context=brief_context)
 
-    response = await llm.ainvoke([
-        SystemMessage(content=WAR_ROOM_SYSTEM),
-        HumanMessage(content=prompt),
-    ])
+    # Retrieve relevant expert corpus chunks for this brief
+    corpus_chunks = await retrieve_corpus(
+        brief_text=f"{brief.client_name} {brief.industry} {brief.raw_input}",
+        stage="debrief",
+        top_k=8,
+    )
+    corpus_block = format_corpus_for_prompt(corpus_chunks)
+    corpus_section = f"\n\n{corpus_block}" if corpus_block else ""
 
-    raw = response.content.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    data = json.loads(raw)
+    prompt = OPENING_BRIEFING_PROMPT.format(
+        brief_context=brief_context + corpus_section,
+    )
 
-    # Format the opening briefing as a rich message
+    data = await _invoke_with_retry(
+        [SystemMessage(content=WAR_ROOM_SYSTEM), HumanMessage(content=prompt)],
+        schema_description="Opening briefing JSON with situation_read, core_tension, angles[], key_questions[], corpus_patterns[]",
+    )
+
     message_content = json.dumps(data)
 
     # Store the AI's opening message
@@ -211,21 +392,14 @@ DRAFT_STAGE_PROMPT = """The consultant has asked you to draft content for the cl
 Conversation so far has established this direction:
 {direction_summary}
 
-Write the client-facing content for this stage. Remember:
-- Clean narrative prose only — no bullet points, no headers
-- Maximum 3 paragraphs
-- Do NOT name any companies, frameworks, or techniques
-- Tone: senior advisor, precise, confident, warm
-- For 'situation': articulate the tension clearly — no recommendations yet
-- For 'strategy': frame the strategic choice — still no tactics
-- For 'recommendation': specific moves, grounded in everything that came before
+{stage_schema_instruction}
 
-Return JSON:
-{{
-  "headline": "<one strong sentence — the single most important thing to say>",
-  "body": "<3 paragraphs of narrative prose>",
-  "internal_note": "<one sentence for the consultant — what you think is most delicate about this draft>"
-}}"""
+Writing rules (apply to headline and body always):
+- Clean narrative prose — no bullet points, no headers, no numbered lists
+- Do NOT name any companies, frameworks, or techniques in client-facing text
+- Tone: senior advisor who has thought carefully and is choosing every word precisely
+- Be specific to this client — never generic
+- The headline must be something the client will remember and quote back"""
 
 
 STANDARD_TURN_PROMPT = """The consultant says:
@@ -323,6 +497,17 @@ async def war_room_turn(turn: WarRoomTurn) -> WarRoomResponse:
     brief = Brief(**result.data)
     brief_context = _build_brief_context(brief)
 
+    # Retrieve relevant corpus chunks — query = brief + consultant's current message
+    corpus_query = f"{brief.industry} {brief.raw_input} {turn.message}"
+    corpus_chunks = await retrieve_corpus(
+        brief_text=corpus_query,
+        stage=turn.target_stage or "situation",
+        top_k=6,
+    )
+    corpus_block = format_corpus_for_prompt(corpus_chunks)
+    if corpus_block:
+        brief_context = brief_context + f"\n\n{corpus_block}"
+
     # Fetch conversation history (last 20 messages for context)
     history_result = (
         db.table("war_room_messages")
@@ -345,15 +530,19 @@ async def war_room_turn(turn: WarRoomTurn) -> WarRoomResponse:
     db.table("war_room_messages").insert(consultant_msg.model_dump()).execute()
 
     # Build prompt based on request type
+    schema_hint = "JSON with message and message_type fields"
     if turn.request_type == "draft_stage" and turn.target_stage:
         direction_summary = "\n".join(
             f"{'AI' if m.role == 'ai' else 'Consultant'}: {m.content[:200]}…"
             for m in history_msgs[-6:]
         )
+        stage_schema = STAGE_SCHEMAS.get(turn.target_stage, {})
+        schema_hint = stage_schema.get("output_schema", schema_hint)
         prompt = DRAFT_STAGE_PROMPT.format(
             stage=turn.target_stage,
             brief_context=brief_context,
             direction_summary=direction_summary,
+            stage_schema_instruction=_get_stage_prompt_instruction(turn.target_stage),
         )
     elif turn.request_type == "explore_angle":
         prompt = ANGLE_EXPLORATION_PROMPT.format(
@@ -376,12 +565,9 @@ async def war_room_turn(turn: WarRoomTurn) -> WarRoomResponse:
             brief_context=brief_context,
         )
 
-    # Call LLM with full conversation context
+    # Call LLM with retry on schema validation failure
     messages = [SystemMessage(content=WAR_ROOM_SYSTEM)] + lc_history + [HumanMessage(content=prompt)]
-    response = await llm.ainvoke(messages)
-
-    raw = response.content.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    data = json.loads(raw)
+    data = await _invoke_with_retry(messages, schema_description=schema_hint)
 
     ai_message_content = data.get("message", raw)
     message_type = data.get("message_type", "standard")
@@ -389,20 +575,20 @@ async def war_room_turn(turn: WarRoomTurn) -> WarRoomResponse:
     # If it's a draft, create a BriefStageContent object
     draft_content = None
     if turn.request_type == "draft_stage" and turn.target_stage:
+        # Collect all structured fields beyond headline/body for the ai_angles store
+        extra_fields = {k: v for k, v in data.items() if k not in ("headline", "body", "internal_note", "message", "message_type")}
         draft_content = BriefStageContent(
             brief_id=turn.brief_id,
             stage=turn.target_stage,
             headline=data.get("headline", ""),
             body=data.get("body", ""),
             internal_notes=data.get("internal_note", ""),
+            ai_angles=[extra_fields] if extra_fields else [],
             is_released=False,
         )
-        # Persist draft
-        db.table("brief_stages").upsert({
-            **draft_content.model_dump(),
-            "is_released": False,
-        }).execute()
+        db.table("brief_stages").upsert(draft_content.model_dump()).execute()
         message_type = "draft_content"
+        logger.info(f"Drafted stage {turn.target_stage} for brief {turn.brief_id}")
 
     # Store AI response
     ai_msg = WarRoomMessage(
