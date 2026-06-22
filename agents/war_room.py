@@ -23,6 +23,7 @@ from config import settings
 from db.client import get_supabase
 from retrieval.corpus import retrieve_corpus, format_corpus_for_prompt
 from agents.brand_file import get_brand_file, format_brand_file_for_prompt, extract_and_update_brand_file
+from agents.competitive_intel import get_latest_competitive_scan, format_scan_for_prompt
 from schemas.models import (
     Brief,
     BriefStageContent,
@@ -517,8 +518,16 @@ async def war_room_turn(turn: WarRoomTurn) -> WarRoomResponse:
     )
     corpus_block = format_corpus_for_prompt(corpus_chunks)
 
+    # Competitive scan — inject for Read/Situation/Strategy stages
+    comp_scan = None
+    if turn.target_stage in ("read", "situation", "strategy") or turn.request_type in ("explore_angle", "corpus_search", "devil_advocate", "draft_stage"):
+        comp_scan = get_latest_competitive_scan(turn.brief_id)
+    comp_block = format_scan_for_prompt(comp_scan) if comp_scan else ""
+
     if brand_file_block:
         brief_context += f"\n\n{brand_file_block}"
+    if comp_block:
+        brief_context += f"\n\n{comp_block}"
     if corpus_block:
         brief_context += f"\n\n{corpus_block}"
 

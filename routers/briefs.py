@@ -28,6 +28,7 @@ from agents.war_room import (
     get_client_portal_view,
 )
 from agents.brand_file import get_brand_file, upsert_brand_file
+from agents.competitive_intel import run_competitive_scan, get_latest_competitive_scan
 from db.client import get_supabase
 
 router = APIRouter()
@@ -265,6 +266,36 @@ async def update_brief_brand_file(brief_id: str, updates: dict) -> dict:
         return {"exists": True, **bf}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Competitive Intelligence — Stage 2 (Read) ────────────────────────────────
+
+@router.post("/briefs/{brief_id}/competitive-scan")
+async def trigger_competitive_scan(brief_id: str, body: dict) -> dict:
+    """
+    Consultant triggers a competitive scan for Stage 2 (Read).
+    Accepts: { "urls": ["https://competitor1.com", ...] }
+    Scrapes each competitor, extracts positioning, synthesises landscape.
+    Cached per brief — re-run to refresh.
+    """
+    urls = body.get("urls", [])
+    if not urls:
+        raise HTTPException(status_code=400, detail="Provide at least one competitor URL in 'urls'")
+    if len(urls) > 10:
+        raise HTTPException(status_code=400, detail="Maximum 10 competitor URLs per scan")
+    try:
+        return await run_competitive_scan(brief_id=brief_id, competitor_urls=urls)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/briefs/{brief_id}/competitive-scan")
+async def get_competitive_scan(brief_id: str) -> dict:
+    """Get the latest completed competitive scan for a brief."""
+    scan = get_latest_competitive_scan(brief_id)
+    if not scan:
+        return {"exists": False, "message": "No competitive scan yet for this brief."}
+    return {"exists": True, **scan}
 
 
 # ── Client Portal — read-only, gated ──────────────────────────────────────────
