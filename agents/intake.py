@@ -1,9 +1,11 @@
 import json
+import re
 import uuid
 from typing import TypedDict
 from langgraph.graph import StateGraph, END
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import SystemMessage, HumanMessage
+import httpx
 
 from config import settings
 from db.client import get_supabase
@@ -55,13 +57,44 @@ def _resolve_technique(req: IntakeRequest) -> str:
     return req.innovation_technique
 
 
+async def _scrape_website(url: str) -> str:
+    """Fetch homepage text for brand context. Returns empty string on any failure."""
+    try:
+        if not url.startswith("http"):
+            url = f"https://{url}"
+        async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
+            r = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+            text = r.text
+        # Strip HTML tags
+        text = re.sub(r"<style[^>]*>.*?</style>", " ", text, flags=re.DOTALL)
+        text = re.sub(r"<script[^>]*>.*?</script>", " ", text, flags=re.DOTALL)
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text[:4000]  # cap at 4k chars
+    except Exception:
+        return ""
+
+
 async def extract_case_file(state: IntakeState) -> IntakeState:
     req = state["request"]
+
+    # Scrape website if provided
+    website_section = ""
+    if req.website:
+        scraped = await _scrape_website(req.website)
+        if scraped:
+            website_section = f"Website content (scraped from {req.website}):\n{scraped}"
+        else:
+            website_section = f"Website: {req.website} (could not be scraped)"
+    else:
+        website_section = ""
+
     user_msg = INTAKE_USER.format(
         client_name=req.client_name,
         industry=_resolve_industry(req),
         budget_inr=f"₹{req.budget_inr:,}" if req.budget_inr else "Not specified",
         timeline_weeks=req.timeline_weeks or "Not specified",
+        website_section=website_section,
         challenges=_build_challenges_text(req),
         inspiration=_build_inspiration_text(req),
         innovation_technique=_resolve_technique(req),

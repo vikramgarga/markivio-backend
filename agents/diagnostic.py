@@ -11,7 +11,7 @@ from schemas.models import DiagnoseRequest, DiagnosisResult
 from prompts.diagnostic import DIAGNOSTIC_SYSTEM, DIAGNOSTIC_USER
 
 llm = ChatAnthropic(
-    model="claude-haiku-4-5-20251001",
+    model="claude-sonnet-4-6",
     api_key=settings.anthropic_api_key,
     max_tokens=1024,
 )

@@ -510,6 +510,7 @@ class IntakeRequest(BaseModel):
 
     budget_inr: int | None = None
     timeline_weeks: int | None = None
+    website: str | None = None  # brand website URL — scraped for richer ICP context
 
 
 class CaseFile(BaseModel):
